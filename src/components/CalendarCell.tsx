@@ -49,14 +49,24 @@ export const CalendarCell: React.FC<CalendarCellProps> = React.memo(({
   }
 
   // Visual style rules matching GeoPhoto Tracker theme
+  const hasPhotosOnMap = !isOutOfBounds && Boolean(mapPhotosCount && mapPhotosCount > 0);
+
   let bgClasses = 'bg-[#181b24] border border-[#2b3042] text-slate-300 hover:bg-[#202533] hover:border-orange-400';
 
+  // Kafelki ze zdjęciami widocznymi na mapie (>0) otrzymują wyraźną ramkę w kolorze ciemnego żółtego (amber-500)
+  if (hasPhotosOnMap) {
+    bgClasses =
+      'bg-[#1a1c27] border border-amber-500 text-slate-200 shadow-[0_0_8px_rgba(245,158,11,0.25)] hover:bg-[#212534] hover:border-amber-400';
+  }
+
   if (isCurrent) {
-    bgClasses =
-      'bg-[#222736] border border-orange-500 text-white shadow-[0_0_12px_rgba(249,115,22,0.35)]';
+    bgClasses = hasPhotosOnMap
+      ? 'bg-[#222736] border border-amber-400 text-white shadow-[0_0_14px_rgba(251,191,36,0.45)]'
+      : 'bg-[#222736] border border-orange-500 text-white shadow-[0_0_12px_rgba(249,115,22,0.35)]';
   } else if (isHovered) {
-    bgClasses =
-      'bg-[#222736] border border-orange-400 text-white shadow-[0_0_10px_rgba(249,115,22,0.25)]';
+    bgClasses = hasPhotosOnMap
+      ? 'bg-[#222736] border border-amber-400 text-white shadow-[0_0_12px_rgba(251,191,36,0.4)]'
+      : 'bg-[#222736] border border-orange-400 text-white shadow-[0_0_10px_rgba(249,115,22,0.25)]';
   }
 
   const isLongLabel = label.length > 7 || zoomLevel === 'TEN_DAYS';

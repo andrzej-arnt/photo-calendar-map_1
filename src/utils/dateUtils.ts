@@ -443,3 +443,97 @@ export function getMockPhotosForCell(cell: CellInfo): PhotoEvent[] {
 
   return photos;
 }
+
+/**
+ * Wyznacza optymalny poziom zoomu (ZoomLevel) i datę bazową (focusDate)
+ * na podstawie zbioru zdjęć widocznych w kadrze mapy.
+ *
+ * Logika hierarchii:
+ * - Przełom dziesięcioleci (np. 2019 i 2021) -> DECADES
+ * - Ta sama dekada, ale różne lata (np. XI 2020 i II 2021) -> YEARS
+ * - Ten sam rok, ale różne miesiące (np. V 2021 i VII 2021) -> MONTHS
+ * - Ten sam miesiąc, ale różne tercje (1-10, 11-20, 21-koniec) lub > 10 dni -> TEN_DAYS
+ * - Ten sam miesiąc i ta sama tercja, ale różne dni -> DAYS
+ * - Ten sam dzień -> HOURS
+ */
+export function determineZoomAndFocusFromPhotos(
+  photos: PhotoEvent[]
+): { zoomLevel: ZoomLevel; focusDate: Date } | null {
+  if (!photos || photos.length === 0) return null;
+
+  if (photos.length === 1) {
+    return {
+      zoomLevel: 'HOURS',
+      focusDate: photos[0].timestamp,
+    };
+  }
+
+  let minTime = Infinity;
+  let maxTime = -Infinity;
+  let minDate = photos[0].timestamp;
+  let maxDate = photos[0].timestamp;
+
+  for (const p of photos) {
+    const t = p.timestamp.getTime();
+    if (t < minTime) {
+      minTime = t;
+      minDate = p.timestamp;
+    }
+    if (t > maxTime) {
+      maxTime = t;
+      maxDate = p.timestamp;
+    }
+  }
+
+  const startDecadeYear = Math.floor(minDate.getFullYear() / 10) * 10;
+  const endDecadeYear = Math.floor(maxDate.getFullYear() / 10) * 10;
+
+  // 1. Różne dziesięciolecia (np. 11.10.2019 do 05.08.2021 -> dwa dziesięciolecia 2010s i 2020s)
+  if (startDecadeYear !== endDecadeYear) {
+    return {
+      zoomLevel: 'DECADES',
+      focusDate: minDate,
+    };
+  }
+
+  // 2. Ta sama dekada, ale różne lata (np. XI 2020 do II 2021 -> dwa kafelki 2020 i 2021)
+  if (minDate.getFullYear() !== maxDate.getFullYear()) {
+    return {
+      zoomLevel: 'YEARS',
+      focusDate: minDate,
+    };
+  }
+
+  // 3. Ten sam rok, ale różne miesiące -> MONTHS
+  if (minDate.getMonth() !== maxDate.getMonth()) {
+    return {
+      zoomLevel: 'MONTHS',
+      focusDate: minDate,
+    };
+  }
+
+  // 4. Ten sam miesiąc, ale różne dni
+  if (minDate.getDate() !== maxDate.getDate()) {
+    const diffDays = Math.abs(maxDate.getDate() - minDate.getDate());
+    const minThird = Math.min(2, Math.floor((minDate.getDate() - 1) / 10));
+    const maxThird = Math.min(2, Math.floor((maxDate.getDate() - 1) / 10));
+
+    if (minThird !== maxThird || diffDays > 10) {
+      return {
+        zoomLevel: 'TEN_DAYS',
+        focusDate: minDate,
+      };
+    }
+
+    return {
+      zoomLevel: 'DAYS',
+      focusDate: minDate,
+    };
+  }
+
+  // 5. Ten sam dzień -> HOURS
+  return {
+    zoomLevel: 'HOURS',
+    focusDate: minDate,
+  };
+}

@@ -25,9 +25,12 @@ interface InteractiveMapProps {
   selectedCell: CellInfo | null;
   selectedPhoto: PhotoEvent | null;
   lastChangeSource: 'CALENDAR' | 'MAP';
+  calendarNavVersion?: number;
   zoomLevel?: ZoomLevel;
   showHeatmap: boolean;
   showRoutes: boolean;
+  routesMode?: 'TEN_DAYS' | 'MAX_PHOTOS';
+  routesMaxPhotos?: number;
   showClusters: boolean;
   routesMinPhotos?: number;
   routesOnlyFromTenDays?: boolean;
@@ -36,6 +39,7 @@ interface InteractiveMapProps {
   onSelectPhoto: (photo: PhotoEvent) => void;
   onOpenFullPhoto?: (photo: PhotoEvent) => void;
   onMapViewportChange: (photosInView: PhotoEvent[]) => void;
+  onUserMapNavigation?: (photosInView: PhotoEvent[]) => void;
 }
 
 // Custom Leaflet DivIcon for Photo Marker
@@ -175,17 +179,21 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   selectedCell,
   selectedPhoto,
   lastChangeSource,
+  calendarNavVersion,
   zoomLevel,
   showHeatmap,
   showRoutes,
+  routesMode = 'TEN_DAYS',
+  routesMaxPhotos = 200,
   showClusters,
   routesMinPhotos = 2,
   routesOnlyFromTenDays = true,
-  heatmapOpacity = 0.85,
+  heatmapOpacity = 0.30,
   onHeatmapOpacityChange,
   onSelectPhoto,
   onOpenFullPhoto,
   onMapViewportChange,
+  onUserMapNavigation,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -206,6 +214,8 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   allPhotosRef.current = allPhotos;
   const onMapViewportChangeRef = useRef(onMapViewportChange);
   onMapViewportChangeRef.current = onMapViewportChange;
+  const onUserMapNavigationRef = useRef(onUserMapNavigation);
+  onUserMapNavigationRef.current = onUserMapNavigation;
   const onOpenFullPhotoRef = useRef(onOpenFullPhoto);
   onOpenFullPhotoRef.current = onOpenFullPhoto;
   const hoverCardTimerRef = useRef<any>(null);
@@ -264,34 +274,32 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     containerEl.addEventListener('mousedown', onUserGesture, { passive: true });
     containerEl.addEventListener('touchstart', onUserGesture, { passive: true });
 
-    // Listener when user manually moves or zooms the map
+    // Listener when map moves or zooms
     const handleMapMoveEnd = () => {
-      // Zawsze aktualizuj bieżący obszar kadru mapy dla dolnego paska miniatur
-      if (mapInstanceRef.current) {
-        setCurrentMapBounds(mapInstanceRef.current.getBounds());
-      }
-
-      // ONLY trigger viewport update if the user deliberately interacted with the map
-      if (isProgrammaticMoveRef.current || !isUserInteractingRef.current) {
-        return;
-      }
-
-      isUserInteractingRef.current = false;
       if (!mapInstanceRef.current) return;
-
       const bounds = mapInstanceRef.current.getBounds();
+      setCurrentMapBounds(bounds);
+
       const currentPhotos = allPhotosRef.current;
       const photosInView = currentPhotos.filter((p) =>
         bounds.contains([p.coordinates.lat, p.coordinates.lng])
       );
 
       setMapViewportVersion((v) => v + 1);
+
+      // ZAWSZE aktualizuj zdjęcia w kadrze (dla wskaźnika "X na mapie" oraz żółtych odznak na kafelkach)
       onMapViewportChangeRef.current(photosInView);
+
+      // TYLKO jeśli ruch był bezpośrednim gestem użytkownika na mapie i nie był ruchem programowym:
+      if (!isProgrammaticMoveRef.current && isUserInteractingRef.current) {
+        isUserInteractingRef.current = false;
+        onUserMapNavigationRef.current?.(photosInView);
+      }
     };
 
     map.on('moveend zoomend viewreset resize', handleMapMoveEnd);
-    // Początkowe pobranie granic mapy
-    setCurrentMapBounds(map.getBounds());
+    // Początkowe pobranie granic mapy i przeliczenie widocznych punktów
+    handleMapMoveEnd();
 
     // Listen for clicks and 0.5s hover on thumbnail/button inside marker popups to open full photo
     const handlePopupOpen = (e: L.PopupEvent) => {
@@ -402,7 +410,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
   const shadowCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const paletteRef = useRef<Uint8ClampedArray | null>(null);
-  const lastFittedKeyRef = useRef<string>('');
+  const lastFittedNavVersionRef = useRef<number>(-1);
 
   const programmaticMoveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -609,16 +617,15 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         !isNaN(p.coordinates.lng)
     );
 
-    // Sprawdź, czy skala czasu pozwala na wyświetlanie trasy (gdy włączona flaga ograniczenia do skali <= 10 dni)
-    const isScaleAllowed = !routesOnlyFromTenDays || (
-      zoomLevel === 'TEN_DAYS' ||
-      zoomLevel === 'DAYS' ||
-      zoomLevel === 'HOURS'
-    );
+    // Sprawdź, czy skala czasu lub limit liczby punktów pozwala na wyświetlanie linii trasy (wzajemnie wykluczające się tryby)
+    const isRouteAllowed =
+      routesMode === 'MAX_PHOTOS'
+        ? validPhotosForRoute.length <= routesMaxPhotos
+        : (zoomLevel === 'TEN_DAYS' || zoomLevel === 'DAYS' || zoomLevel === 'HOURS');
 
-    const minRequiredPhotos = Math.max(2, routesMinPhotos || 2);
+    const minRequiredPhotos = 2;
 
-    if (showRoutes && isScaleAllowed && validPhotosForRoute.length >= minRequiredPhotos) {
+    if (showRoutes && isRouteAllowed && validPhotosForRoute.length >= minRequiredPhotos) {
       if (!map.hasLayer(routesLayer)) {
         routesLayer.addTo(map);
       }
@@ -883,10 +890,29 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       });
     }
 
-    // Auto-fit bounds ONLY when triggered by calendar navigation and photos set actually changed
-    const photosKey = `${photosToRender.length}_${photosToRender[0]?.id}_${photosToRender[photosToRender.length - 1]?.id}`;
-    if (bounds.isValid() && lastChangeSource === 'CALENDAR' && lastFittedKeyRef.current !== photosKey) {
-      lastFittedKeyRef.current = photosKey;
+    // Auto-fit bounds ONLY when triggered by calendar navigation (zoom/scroll/click/jump) and photos exist
+    const isCalendarTrigger =
+      lastChangeSource === 'CALENDAR' &&
+      calendarNavVersion !== undefined &&
+      lastFittedNavVersionRef.current !== calendarNavVersion;
+
+    const photosForBounds = visiblePhotos.length > 0 ? visiblePhotos : [];
+    const calendarBounds = L.latLngBounds([]);
+    photosForBounds.forEach((p) => {
+      if (
+        p &&
+        p.coordinates &&
+        typeof p.coordinates.lat === 'number' &&
+        typeof p.coordinates.lng === 'number' &&
+        !isNaN(p.coordinates.lat) &&
+        !isNaN(p.coordinates.lng)
+      ) {
+        calendarBounds.extend([p.coordinates.lat, p.coordinates.lng]);
+      }
+    });
+
+    if (calendarBounds.isValid() && isCalendarTrigger && photosForBounds.length > 0) {
+      lastFittedNavVersionRef.current = calendarNavVersion;
       isProgrammaticMoveRef.current = true;
       isUserInteractingRef.current = false;
       
@@ -894,25 +920,26 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       const onProgrammaticMoveEnd = () => {
         moveEndFired = true;
         isProgrammaticMoveRef.current = false;
+        isUserInteractingRef.current = false;
       };
       
       map.once('moveend', onProgrammaticMoveEnd);
       
-      if (photosToRender.length === 1) {
+      if (photosForBounds.length === 1) {
         map.setView(
-          [photosToRender[0].coordinates.lat, photosToRender[0].coordinates.lng],
-          9,
-          { animate: false }
+          [photosForBounds[0].coordinates.lat, photosForBounds[0].coordinates.lng],
+          12,
+          { animate: true }
         );
       } else {
-        map.fitBounds(bounds, {
+        map.fitBounds(calendarBounds, {
           padding: [50, 50],
-          maxZoom: 12,
-          animate: false,
+          maxZoom: 13,
+          animate: true,
         });
       }
       
-      // Fallback in case moveend doesn't fire (e.g. map already at these bounds)
+      // Fallback in case moveend doesn't fire (e.g. map already exactly at these bounds)
       if (programmaticMoveTimeoutRef.current) {
         clearTimeout(programmaticMoveTimeoutRef.current);
       }
@@ -920,13 +947,15 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         if (!moveEndFired) {
           map.off('moveend', onProgrammaticMoveEnd);
           isProgrammaticMoveRef.current = false;
+          isUserInteractingRef.current = false;
         }
-      }, 150);
+      }, 800);
     }
   }, [
     visiblePhotos,
     selectedPhoto,
     lastChangeSource,
+    calendarNavVersion,
     onSelectPhoto,
     allPhotos,
     showRoutes,

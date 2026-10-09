@@ -9,7 +9,12 @@ import {
   addMonths,
   addDays,
   addHours,
+  startOfYear,
+  endOfYear,
   startOfMonth,
+  endOfMonth,
+  startOfDay,
+  endOfDay,
 } from 'date-fns';
 import { CellInfo, ZoomLevel, PhotoEvent } from './types';
 import { MOCK_PHOTOS } from './data/mockPhotos';
@@ -19,8 +24,11 @@ import {
   ZOOM_LEVEL_ORDER,
   addDecades,
   addTenDays,
+  startOfDecade,
+  endOfDecade,
   getStartOfPeriod,
   getPhotoPeriods,
+  determineZoomAndFocusFromPhotos,
 } from './utils/dateUtils';
 import { InteractiveMap } from './components/InteractiveMap';
 import { ControlSidebar } from './components/ControlSidebar';
@@ -30,27 +38,67 @@ import { ExifExtractionModal } from './components/ExifExtractionModal';
 import { FullPhotoModal } from './components/FullPhotoModal';
 import { MssqlStatusModal, MssqlStatusData } from './components/MssqlStatusModal';
 
-function calculateOptimalFocusDate(newZoom: ZoomLevel, currentFocus: Date, allPhotos: PhotoEvent[]): Date {
-  const photoPeriods = getPhotoPeriods(allPhotos, newZoom);
-  if (photoPeriods.length === 0) return currentFocus;
-
-  const currentMatch = photoPeriods.find(
-    (p) => currentFocus >= p.startDate && currentFocus <= p.endDate
+/**
+ * Wyznacza focusDate przy powiększaniu konkretnego kafelka (Zoom IN).
+ * ZAWSZE wybiera pierwsze zdjęcie wewnątrz klikniętego/scrollowanego kafelka,
+ * dzięki czemu wejście np. w 2019 ZAWSZE pokaże miesiące 2019 roku, a nie 2018!
+ */
+function getFocusDateForZoomIn(cell: CellInfo, allPhotos: PhotoEvent[]): Date {
+  const photosInCell = allPhotos.filter(
+    (p) => p.timestamp >= cell.startDate && p.timestamp <= cell.endDate
   );
-  if (currentMatch) return currentMatch.startDate;
 
-  const focusTime = currentFocus.getTime();
-  let minDiff = Infinity;
-  let closest = photoPeriods[0].startDate;
-  for (const p of photoPeriods) {
-    const diff = Math.abs(p.startDate.getTime() - focusTime);
-    if (diff < minDiff) {
-      minDiff = diff;
-      closest = p.startDate;
-    }
+  if (photosInCell.length > 0) {
+    const sorted = [...photosInCell].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    return sorted[0].timestamp;
   }
 
-  return closest;
+  return cell.startDate;
+}
+
+/**
+ * Wyznacza optymalny focusDate przy zmianie skali w nagłówku lub Zoom OUT.
+ * Szuka zdjęć wewnątrz bieżącego okresu nadrzędnego (np. w tym samym roku),
+ * zapobiegając niekontrolowanym przeskokom pomiędzy latami.
+ */
+function calculateOptimalFocusDate(newZoom: ZoomLevel, currentFocus: Date, allPhotos: PhotoEvent[]): Date {
+  if (!allPhotos || allPhotos.length === 0) return currentFocus;
+
+  let parentStart: Date;
+  let parentEnd: Date;
+
+  switch (newZoom) {
+    case 'DECADES':
+      return currentFocus;
+    case 'YEARS':
+      parentStart = startOfDecade(currentFocus);
+      parentEnd = endOfDecade(currentFocus);
+      break;
+    case 'MONTHS':
+      parentStart = startOfYear(currentFocus);
+      parentEnd = endOfYear(currentFocus);
+      break;
+    case 'TEN_DAYS':
+    case 'DAYS':
+      parentStart = startOfMonth(currentFocus);
+      parentEnd = endOfMonth(currentFocus);
+      break;
+    case 'HOURS':
+      parentStart = startOfDay(currentFocus);
+      parentEnd = endOfDay(currentFocus);
+      break;
+  }
+
+  const photosInParent = allPhotos.filter(
+    (p) => p.timestamp >= parentStart && p.timestamp <= parentEnd
+  );
+
+  if (photosInParent.length > 0) {
+    const sorted = [...photosInParent].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    return sorted[0].timestamp;
+  }
+
+  return currentFocus;
 }
 
 export default function App() {
@@ -184,11 +232,13 @@ export default function App() {
   // Map Layer Toggles matching reference image
   const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
   const [showRoutes, setShowRoutes] = useState<boolean>(true);
+  const [routesMode, setRoutesMode] = useState<'TEN_DAYS' | 'MAX_PHOTOS'>('TEN_DAYS');
+  const [routesMaxPhotos, setRoutesMaxPhotos] = useState<number>(200);
   const [routesMinPhotos, setRoutesMinPhotos] = useState<number>(2);
   const [routesOnlyFromTenDays, setRoutesOnlyFromTenDays] = useState<boolean>(true);
   const [showClusters, setShowClusters] = useState<boolean>(false);
   const [showPhotoPreview, setShowPhotoPreview] = useState<boolean>(true);
-  const [heatmapOpacity, setHeatmapOpacity] = useState<number>(0.85);
+  const [heatmapOpacity, setHeatmapOpacity] = useState<number>(0.30);
 
   // Modals
   const [showJumpModal, setShowJumpModal] = useState<boolean>(false);
@@ -197,6 +247,7 @@ export default function App() {
 
   const [mapViewportPhotos, setMapViewportPhotos] = useState<PhotoEvent[]>([]);
   const [lastChangeSource, setLastChangeSource] = useState<'CALENDAR' | 'MAP'>('CALENDAR');
+  const [calendarNavVersion, setCalendarNavVersion] = useState<number>(0);
 
   // Set of photo IDs currently visible on the map viewport
   const mapViewportPhotoIds = useMemo(
@@ -237,6 +288,8 @@ export default function App() {
   const handleHeaderZoomChange = useCallback(
     (newZoom: ZoomLevel) => {
       setLastChangeSource('CALENDAR');
+      setCalendarNavVersion((v) => v + 1);
+      setSelectedCell(null);
       setZoomLevel(newZoom);
       setFocusDate((prev) => calculateOptimalFocusDate(newZoom, prev, activePhotos));
     },
@@ -246,6 +299,7 @@ export default function App() {
   // Reset focus date to present real-time moment
   const handleResetToNow = useCallback(() => {
     setLastChangeSource('CALENDAR');
+    setCalendarNavVersion((v) => v + 1);
     setSelectedCell(null);
     setSelectedPhoto(null);
     const currentDate = new Date();
@@ -256,6 +310,7 @@ export default function App() {
   // Jump to specific date
   const handleJumpToDate = useCallback((targetDate: Date) => {
     setLastChangeSource('CALENDAR');
+    setCalendarNavVersion((v) => v + 1);
     setSelectedCell(null);
     setSelectedPhoto(null);
     setFocusDate(targetDate);
@@ -266,12 +321,13 @@ export default function App() {
   const handleZoomInCell = useCallback(
     (cell: CellInfo) => {
       setLastChangeSource('CALENDAR');
+      setCalendarNavVersion((v) => v + 1);
       const currentIndex = ZOOM_LEVEL_ORDER.indexOf(zoomLevel);
       if (currentIndex < ZOOM_LEVEL_ORDER.length - 1) {
         const nextZoom = ZOOM_LEVEL_ORDER[currentIndex + 1];
         setZoomLevel(nextZoom);
         setSelectedCell(null);
-        setFocusDate(calculateOptimalFocusDate(nextZoom, cell.startDate, activePhotos));
+        setFocusDate(getFocusDateForZoomIn(cell, activePhotos));
       }
     },
     [zoomLevel, activePhotos]
@@ -280,6 +336,7 @@ export default function App() {
   // Zoom out (step up scale hierarchy)
   const handleZoomOut = useCallback(() => {
     setLastChangeSource('CALENDAR');
+    setCalendarNavVersion((v) => v + 1);
     const currentIndex = ZOOM_LEVEL_ORDER.indexOf(zoomLevel);
     if (currentIndex > 0) {
       const prevZoom = ZOOM_LEVEL_ORDER[currentIndex - 1];
@@ -292,6 +349,7 @@ export default function App() {
   // Navigation handlers (Step backward / forward)
   const handlePrev = useCallback(() => {
     setLastChangeSource('CALENDAR');
+    setCalendarNavVersion((v) => v + 1);
     setSelectedCell(null);
     switch (zoomLevel) {
       case 'DECADES':
@@ -317,6 +375,7 @@ export default function App() {
 
   const handleNext = useCallback(() => {
     setLastChangeSource('CALENDAR');
+    setCalendarNavVersion((v) => v + 1);
     setSelectedCell(null);
     switch (zoomLevel) {
       case 'DECADES':
@@ -372,9 +431,22 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Update visible map viewport photos
+  // Aktualizuj zdjęcia w kadrze mapy (dla żółtych odznak na kafelkach i licznika "X na mapie")
   const handleMapViewportChange = useCallback((visibleOnMap: PhotoEvent[]) => {
     setMapViewportPhotos(visibleOnMap);
+  }, []);
+
+  // Dopasuj skalę i datę kalendarza TYLKO gdy użytkownik ręcznie przesuwa lub zoomuje mapę
+  const handleUserMapNavigation = useCallback((visibleOnMap: PhotoEvent[]) => {
+    if (visibleOnMap.length > 0) {
+      const match = determineZoomAndFocusFromPhotos(visibleOnMap);
+      if (match) {
+        setLastChangeSource('MAP');
+        setZoomLevel(match.zoomLevel);
+        setFocusDate(match.focusDate);
+        setSelectedCell(null);
+      }
+    }
   }, []);
 
   // Select photo from marker click
@@ -408,9 +480,12 @@ export default function App() {
             selectedCell={selectedCell}
             selectedPhoto={selectedPhoto}
             lastChangeSource={lastChangeSource}
+            calendarNavVersion={calendarNavVersion}
             zoomLevel={zoomLevel}
             showHeatmap={showHeatmap}
             showRoutes={showRoutes}
+            routesMode={routesMode}
+            routesMaxPhotos={routesMaxPhotos}
             showClusters={showClusters}
             routesMinPhotos={routesMinPhotos}
             routesOnlyFromTenDays={routesOnlyFromTenDays}
@@ -419,6 +494,7 @@ export default function App() {
             onSelectPhoto={handleSelectPhotoFromMap}
             onOpenFullPhoto={(photo) => setFullPhotoModalItem(photo)}
             onMapViewportChange={handleMapViewportChange}
+            onUserMapNavigation={handleUserMapNavigation}
           />
         </section>
 
@@ -437,6 +513,10 @@ export default function App() {
             heatmapOpacity={heatmapOpacity}
             onHeatmapOpacityChange={setHeatmapOpacity}
             showRoutes={showRoutes}
+            routesMode={routesMode}
+            routesMaxPhotos={routesMaxPhotos}
+            onChangeRoutesMode={setRoutesMode}
+            onChangeRoutesMaxPhotos={setRoutesMaxPhotos}
             showClusters={showClusters}
             routesMinPhotos={routesMinPhotos}
             routesOnlyFromTenDays={routesOnlyFromTenDays}
@@ -449,6 +529,7 @@ export default function App() {
             onToggleClusters={setShowClusters}
             onCellClick={(cell) => {
               setLastChangeSource('CALENDAR');
+              setCalendarNavVersion((v) => v + 1);
               setSelectedCell(cell);
             }}
             onZoomInCell={handleZoomInCell}

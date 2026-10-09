@@ -1,0 +1,6 @@
+{
+  "name": "Kalendarz 5x5",
+  "description": "Interaktywny 5x5 kalendarz wielopoziomowy z płynnym zoomem kołkiem myszy i aktualizacją w czasie rzeczywistym.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

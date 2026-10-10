@@ -38,11 +38,6 @@ import { ExifExtractionModal } from './components/ExifExtractionModal';
 import { FullPhotoModal } from './components/FullPhotoModal';
 import { MssqlStatusModal, MssqlStatusData } from './components/MssqlStatusModal';
 
-/**
- * Wyznacza focusDate przy powiększaniu konkretnego kafelka (Zoom IN).
- * ZAWSZE wybiera pierwsze zdjęcie wewnątrz klikniętego/scrollowanego kafelka,
- * dzięki czemu wejście np. w 2019 ZAWSZE pokaże miesiące 2019 roku, a nie 2018!
- */
 function getFocusDateForZoomIn(cell: CellInfo, allPhotos: PhotoEvent[]): Date {
   const photosInCell = allPhotos.filter(
     (p) => p.timestamp >= cell.startDate && p.timestamp <= cell.endDate
@@ -56,11 +51,6 @@ function getFocusDateForZoomIn(cell: CellInfo, allPhotos: PhotoEvent[]): Date {
   return cell.startDate;
 }
 
-/**
- * Wyznacza optymalny focusDate przy zmianie skali w nagłówku lub Zoom OUT.
- * Szuka zdjęć wewnątrz bieżącego okresu nadrzędnego (np. w tym samym roku),
- * zapobiegając niekontrolowanym przeskokom pomiędzy latami.
- */
 function calculateOptimalFocusDate(newZoom: ZoomLevel, currentFocus: Date, allPhotos: PhotoEvent[]): Date {
   if (!allPhotos || allPhotos.length === 0) return currentFocus;
 
@@ -143,7 +133,6 @@ export default function App() {
       setMssqlStatus(data);
 
       if ((data.connected || (data.totalPhotos && data.totalPhotos > 0)) && (data.totalPhotos || 0) > 0) {
-        // Fetch photos from MSSQL or Synced cache
         const photosRes = await fetch('/api/photos?limit=50000');
         if (photosRes.ok) {
           const pData = await photosRes.json();
@@ -163,7 +152,6 @@ export default function App() {
             setMssqlPhotos(mapped);
             setUseMockMode(false);
 
-            // Automatically set focus date to the latest photo
             if (mapped.length > 0) {
               setFocusDate(mapped[mapped.length - 1].timestamp);
             }
@@ -171,7 +159,6 @@ export default function App() {
         }
       }
     } catch {
-      // Graceful fallback to mock mode if backend or MSSQL isn't available
       setMssqlStatus({
         connected: false,
         server: 'localhost',
@@ -229,13 +216,12 @@ export default function App() {
     await checkMssqlAndFetch();
   }, [checkMssqlAndFetch]);
 
-  // Map Layer Toggles matching reference image
+  // Map Layer Toggles
   const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
   const [showRoutes, setShowRoutes] = useState<boolean>(true);
-  const [routesMode, setRoutesMode] = useState<'TEN_DAYS' | 'MAX_PHOTOS'>('TEN_DAYS');
+  const [routesMode, setRoutesMode] = useState<'SCALE' | 'MAX_PHOTOS'>('SCALE');
+  const [routesScaleThreshold, setRoutesScaleThreshold] = useState<ZoomLevel>('TEN_DAYS');
   const [routesMaxPhotos, setRoutesMaxPhotos] = useState<number>(200);
-  const [routesMinPhotos, setRoutesMinPhotos] = useState<number>(2);
-  const [routesOnlyFromTenDays, setRoutesOnlyFromTenDays] = useState<boolean>(true);
   const [showClusters, setShowClusters] = useState<boolean>(false);
   const [showPhotoPreview, setShowPhotoPreview] = useState<boolean>(true);
   const [heatmapOpacity, setHeatmapOpacity] = useState<number>(0.30);
@@ -249,13 +235,11 @@ export default function App() {
   const [lastChangeSource, setLastChangeSource] = useState<'CALENDAR' | 'MAP'>('CALENDAR');
   const [calendarNavVersion, setCalendarNavVersion] = useState<number>(0);
 
-  // Set of photo IDs currently visible on the map viewport
   const mapViewportPhotoIds = useMemo(
     () => new Set(mapViewportPhotos.map((p) => p.id)),
     [mapViewportPhotos]
   );
 
-  // Compute the 25 grid cells dynamically with map photo highlighting
   const cells = useMemo(() => {
     return generateGridCells(focusDate, zoomLevel, now, activePhotos, mapViewportPhotoIds);
   }, [focusDate, zoomLevel, now, activePhotos, mapViewportPhotoIds]);
@@ -264,7 +248,6 @@ export default function App() {
     return formatHeaderDateRange(focusDate, zoomLevel, cells);
   }, [focusDate, zoomLevel, cells]);
 
-  // Compute active visible photos for current 25-cell window (or selected cell)
   const visiblePhotos = useMemo(() => {
     if (cells.length === 0) return [];
 
@@ -284,7 +267,6 @@ export default function App() {
     );
   }, [cells, selectedCell, activePhotos]);
 
-  // Handle zoom scale change
   const handleHeaderZoomChange = useCallback(
     (newZoom: ZoomLevel) => {
       setLastChangeSource('CALENDAR');
@@ -296,7 +278,6 @@ export default function App() {
     [activePhotos]
   );
 
-  // Reset focus date to present real-time moment
   const handleResetToNow = useCallback(() => {
     setLastChangeSource('CALENDAR');
     setCalendarNavVersion((v) => v + 1);
@@ -307,7 +288,6 @@ export default function App() {
     setFocusDate(currentDate);
   }, []);
 
-  // Jump to specific date
   const handleJumpToDate = useCallback((targetDate: Date) => {
     setLastChangeSource('CALENDAR');
     setCalendarNavVersion((v) => v + 1);
@@ -317,7 +297,6 @@ export default function App() {
     setShowJumpModal(false);
   }, []);
 
-  // Zoom into specific cell (step down scale hierarchy)
   const handleZoomInCell = useCallback(
     (cell: CellInfo) => {
       setLastChangeSource('CALENDAR');
@@ -333,7 +312,6 @@ export default function App() {
     [zoomLevel, activePhotos]
   );
 
-  // Zoom out (step up scale hierarchy)
   const handleZoomOut = useCallback(() => {
     setLastChangeSource('CALENDAR');
     setCalendarNavVersion((v) => v + 1);
@@ -346,7 +324,6 @@ export default function App() {
     }
   }, [zoomLevel, activePhotos]);
 
-  // Navigation handlers (Step backward / forward)
   const handlePrev = useCallback(() => {
     setLastChangeSource('CALENDAR');
     setCalendarNavVersion((v) => v + 1);
@@ -399,7 +376,6 @@ export default function App() {
     }
   }, [zoomLevel]);
 
-  // Global mouse wheel event for zoom navigation
   useEffect(() => {
     const handleGlobalWheel = (e: WheelEvent) => {
       const target = e.target as HTMLElement;
@@ -423,7 +399,6 @@ export default function App() {
     return () => window.removeEventListener('wheel', handleGlobalWheel);
   }, [zoomLevel, handleHeaderZoomChange]);
 
-  // Real-time clock tick every second
   useEffect(() => {
     const timer = setInterval(() => {
       setNow(new Date());
@@ -431,12 +406,10 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Aktualizuj zdjęcia w kadrze mapy (dla żółtych odznak na kafelkach i licznika "X na mapie")
   const handleMapViewportChange = useCallback((visibleOnMap: PhotoEvent[]) => {
     setMapViewportPhotos(visibleOnMap);
   }, []);
 
-  // Dopasuj skalę i datę kalendarza TYLKO gdy użytkownik ręcznie przesuwa lub zoomuje mapę
   const handleUserMapNavigation = useCallback((visibleOnMap: PhotoEvent[]) => {
     if (visibleOnMap.length > 0) {
       const match = determineZoomAndFocusFromPhotos(visibleOnMap);
@@ -449,7 +422,6 @@ export default function App() {
     }
   }, []);
 
-  // Select photo from marker click
   const handleSelectPhotoFromMap = useCallback(
     (photo: PhotoEvent) => {
       setLastChangeSource('MAP');
@@ -468,9 +440,7 @@ export default function App() {
 
   return (
     <div className="w-screen h-screen flex flex-col bg-[#0b0d14] text-slate-100 font-sans select-none overflow-hidden">
-      {/* Main Screen Layout: Separated Left Map Window + Right Control Sidebar Window */}
       <main className="flex-1 w-full min-h-0 flex flex-row gap-3 p-2.5 sm:p-3 overflow-hidden">
-        {/* Left Window: Interactive Map (Dynamic size to browser window, no vertical scrollbar) */}
         <section className="flex-1 min-w-0 h-full flex flex-col overflow-hidden relative rounded-2xl bg-[#0e111a] border border-[#222736] shadow-2xl">
           <InteractiveMap
             visiblePhotos={visiblePhotos}
@@ -485,10 +455,9 @@ export default function App() {
             showHeatmap={showHeatmap}
             showRoutes={showRoutes}
             routesMode={routesMode}
+            routesScaleThreshold={routesScaleThreshold}
             routesMaxPhotos={routesMaxPhotos}
             showClusters={showClusters}
-            routesMinPhotos={routesMinPhotos}
-            routesOnlyFromTenDays={routesOnlyFromTenDays}
             heatmapOpacity={heatmapOpacity}
             onHeatmapOpacityChange={setHeatmapOpacity}
             onSelectPhoto={handleSelectPhotoFromMap}
@@ -498,7 +467,6 @@ export default function App() {
           />
         </section>
 
-        {/* Right Window: Control Sidebar (Max 560px, independent window with independent vertical scrollbar) */}
         <div className="w-[420px] sm:w-[450px] xl:w-[480px] 2xl:w-[500px] max-w-[560px] h-full min-h-0 shrink-0 flex flex-col rounded-2xl bg-[#0b0d14] border border-[#222736] overflow-hidden shadow-2xl">
           <ControlSidebar
             now={now}
@@ -514,14 +482,12 @@ export default function App() {
             onHeatmapOpacityChange={setHeatmapOpacity}
             showRoutes={showRoutes}
             routesMode={routesMode}
+            routesScaleThreshold={routesScaleThreshold}
             routesMaxPhotos={routesMaxPhotos}
             onChangeRoutesMode={setRoutesMode}
+            onChangeRoutesScaleThreshold={setRoutesScaleThreshold}
             onChangeRoutesMaxPhotos={setRoutesMaxPhotos}
             showClusters={showClusters}
-            routesMinPhotos={routesMinPhotos}
-            routesOnlyFromTenDays={routesOnlyFromTenDays}
-            onChangeRoutesMinPhotos={setRoutesMinPhotos}
-            onToggleRoutesOnlyFromTenDays={setRoutesOnlyFromTenDays}
             onZoomChange={handleHeaderZoomChange}
             onTogglePhotoPreview={setShowPhotoPreview}
             onToggleHeatmap={setShowHeatmap}
@@ -546,7 +512,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* Footer Status Bar */}
       <footer className="w-full py-1.5 px-4 text-center text-[10px] text-slate-500 border-t border-[#1a1d2b] bg-[#090b12] shrink-0 font-mono">
         <div className="max-w-[1900px] mx-auto flex justify-between items-center">
           <span>GeoPhoto Tracker 5×5 — Połączona Analiza Geoprzestrzenna EXIF</span>
@@ -565,7 +530,6 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Cell Inspector Modal */}
       <CellDetailModal
         cell={selectedCell}
         zoomLevel={zoomLevel}
@@ -574,7 +538,6 @@ export default function App() {
         onOpenFullPhoto={(photo) => setFullPhotoModalItem(photo)}
       />
 
-      {/* Jump To Date Picker Modal */}
       <JumpToDateModal
         isOpen={showJumpModal}
         onClose={() => setShowJumpModal(false)}
@@ -582,14 +545,12 @@ export default function App() {
         onJump={handleJumpToDate}
       />
 
-      {/* EXIF Extraction Modal */}
       <ExifExtractionModal
         isOpen={showExifModal}
         onClose={() => setShowExifModal(false)}
         onScanComplete={() => setShowExifModal(false)}
       />
 
-      {/* MSSQL Status & Config Modal */}
       <MssqlStatusModal
         isOpen={showMssqlModal}
         onClose={() => setShowMssqlModal(false)}
@@ -603,7 +564,6 @@ export default function App() {
         onClearSync={handleClearSync}
       />
 
-      {/* Full Photo Lightbox Modal */}
       <FullPhotoModal
         photo={fullPhotoModalItem}
         photosList={visiblePhotos.length > 0 ? visiblePhotos : activePhotos}

@@ -4,6 +4,8 @@ import { CalendarGrid } from './CalendarGrid';
 import { CalendarHeader } from './CalendarHeader';
 import { MapPin, Camera, Flame, Route, Layers, Eye, Sliders } from 'lucide-react';
 
+const PHOTO_THRESHOLDS = [10, 25, 50, 100, 200, 500, 1000, 2000];
+
 interface ControlSidebarProps {
   now?: Date;
   focusDate?: Date;
@@ -17,6 +19,10 @@ interface ControlSidebarProps {
   heatmapOpacity?: number;
   onHeatmapOpacityChange?: (val: number) => void;
   showRoutes: boolean;
+  routesMode?: 'TEN_DAYS' | 'MAX_PHOTOS';
+  routesMaxPhotos?: number;
+  onChangeRoutesMode?: (mode: 'TEN_DAYS' | 'MAX_PHOTOS') => void;
+  onChangeRoutesMaxPhotos?: (val: number) => void;
   showClusters: boolean;
   routesMinPhotos?: number;
   routesOnlyFromTenDays?: boolean;
@@ -53,6 +59,10 @@ export const ControlSidebar: React.FC<ControlSidebarProps> = ({
   heatmapOpacity = 0.85,
   onHeatmapOpacityChange,
   showRoutes,
+  routesMode = 'TEN_DAYS',
+  routesMaxPhotos = 200,
+  onChangeRoutesMode,
+  onChangeRoutesMaxPhotos,
   showClusters,
   routesMinPhotos = 2,
   routesOnlyFromTenDays = true,
@@ -125,7 +135,7 @@ export const ControlSidebar: React.FC<ControlSidebarProps> = ({
         </div>
       </div>
 
-      {/* Layer Toggles Section (Matching Screenshot) */}
+      {/* Layer Toggles Section */}
       <div className="bg-[#131622] rounded-2xl border border-[#252a3a] p-3.5 shadow-xl flex flex-col gap-3">
         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
           WARSTWY MAPY & PREZENTACJA
@@ -151,7 +161,7 @@ export const ControlSidebar: React.FC<ControlSidebarProps> = ({
               </label>
             </div>
 
-            {/* Suwak i szybkie presety przezroczystości (widoczne gdy heatmapa jest aktywna) */}
+            {/* Suwak i szybkie presety przezroczystości */}
             {showHeatmap && (
               <div className="pt-2 border-t border-[#262c3e] flex flex-col gap-2 animate-fadeIn">
                 <div className="flex items-center justify-between text-[11px]">
@@ -164,7 +174,6 @@ export const ControlSidebar: React.FC<ControlSidebarProps> = ({
                   </span>
                 </div>
 
-                {/* Płynny suwak z etykietami skrajnymi */}
                 <div className="flex items-center gap-2 px-0.5">
                   <span className="text-[10px] text-slate-500 font-mono">10%</span>
                   <input
@@ -180,7 +189,6 @@ export const ControlSidebar: React.FC<ControlSidebarProps> = ({
                   <span className="text-[10px] text-slate-500 font-mono">100%</span>
                 </div>
 
-                {/* Szybkie presety (Delikatna 30%, Średnia 60%, Domyślna 85%, Pełna 100%) */}
                 <div className="grid grid-cols-4 gap-1 pt-0.5">
                   {[
                     { label: '30%', val: 0.30, title: 'Delikatna (30%)' },
@@ -211,12 +219,12 @@ export const ControlSidebar: React.FC<ControlSidebarProps> = ({
           </div>
 
           {/* Route Lines Toggle */}
-          <div className="flex flex-col gap-2 bg-[#191d2c] p-2.5 rounded-xl border border-[#2c3348]">
+          <div className="flex flex-col gap-2.5 bg-[#191d2c] p-2.5 rounded-xl border border-[#2c3348]">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className={`w-3.5 h-3.5 rounded-full ${showRoutes ? 'bg-orange-400 shadow-[0_0_8px_rgba(251,146,60,0.8)]' : 'bg-slate-600'}`} />
                 <Route className="w-4 h-4 text-orange-400" />
-                <span className="text-xs font-bold text-slate-200">Pokaż linie tras</span>
+                <span className="text-xs font-bold text-slate-200">Pokaż linie tras / strzałki</span>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input
@@ -229,27 +237,74 @@ export const ControlSidebar: React.FC<ControlSidebarProps> = ({
               </label>
             </div>
 
-            {/* Opcje dodatkowe dla linii tras */}
+            {/* Opcje dodatkowe dla linii tras (WZJEMNIE WYKLUCZAJĄCE SIĘ TRYBY W JEDNEJ LINII) */}
             {showRoutes && (
-              <div className="pt-2 border-t border-[#262c3e] flex flex-col gap-2 animate-fadeIn text-[11px]">
-                {/* Parametr 1: Ograniczenie do skali 10 dni */}
-                <div className="flex items-center justify-between">
-                  <div className="flex flex-col">
-                    <span className="text-slate-300 font-medium">Tylko od skali ≤ 10 dni</span>
-                    <span className="text-[9px] text-slate-400 font-mono">10 DNI, DZIEŃ, GODZINY</span>
+              <div className="pt-2 border-t border-[#262c3e] flex flex-col gap-2.5 animate-fadeIn text-[11px]">
+                {/* Przełącznik trybu wykluczającego */}
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
+                    Warunek wyświetlania linii i strzałek
+                  </span>
+                  <div className="flex rounded-lg bg-[#121520] p-1 border border-[#282f42]">
+                    <button
+                      type="button"
+                      onClick={() => onChangeRoutesMode?.('TEN_DAYS')}
+                      className={`flex-1 py-1 px-2 text-[11px] font-semibold rounded-md transition-all text-center ${
+                        routesMode === 'TEN_DAYS'
+                          ? 'bg-orange-500 text-slate-950 font-bold shadow-xs'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-[#1a1f30]'
+                      }`}
+                    >
+                      Skala ≤ 10 dni
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onChangeRoutesMode?.('MAX_PHOTOS')}
+                      className={`flex-1 py-1 px-2 text-[11px] font-semibold rounded-md transition-all text-center ${
+                        routesMode === 'MAX_PHOTOS'
+                          ? 'bg-orange-500 text-slate-950 font-bold shadow-xs'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-[#1a1f30]'
+                      }`}
+                    >
+                      Liczba zdjęć na mapie
+                    </button>
                   </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={routesOnlyFromTenDays}
-                      onChange={(e) => onToggleRoutesOnlyFromTenDays?.(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-8 h-4.5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-orange-500"></div>
-                  </label>
                 </div>
 
-                {/* Parametr 2: Minimalna liczba widocznych zdjęć na mapie do wyświetlania trasy */}
+                {/* Jeśli wybrano tryb liczbowy zdjęć: Progi graficzne w jednej linii (10 do 2000) */}
+                {routesMode === 'MAX_PHOTOS' && (
+                  <div className="flex flex-col gap-1.5 pt-1 border-t border-[#222736]">
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-300 font-medium">Maks. zdjęć na mapie:</span>
+                      <span className="font-mono font-bold text-orange-400 tabular-nums px-2 py-0.5 rounded bg-[#12141c] border border-[#262c3e]">
+                        ≤ {routesMaxPhotos}
+                      </span>
+                    </div>
+                    {/* Linia przycisków mieszcząca się w jednej linii */}
+                    <div className="flex items-center gap-1 overflow-x-auto py-0.5 no-scrollbar">
+                      {PHOTO_THRESHOLDS.map((thresh) => {
+                        const isSelected = routesMaxPhotos === thresh;
+                        return (
+                          <button
+                            key={thresh}
+                            type="button"
+                            onClick={() => onChangeRoutesMaxPhotos?.(thresh)}
+                            className={`flex-1 min-w-[32px] py-1 text-[10px] font-mono font-bold rounded-md border transition-all text-center ${
+                              isSelected
+                                ? 'bg-orange-500 border-orange-400 text-slate-950 shadow-xs'
+                                : 'bg-[#141724] border border-[#282f42] text-slate-400 hover:text-slate-200 hover:bg-[#1d2234]'
+                            }`}
+                            title={`Pokazuj strzałki gdy na mapie jest mniej niż ${thresh} zdjęć`}
+                          >
+                            {thresh >= 1000 ? `${thresh / 1000}k` : thresh}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Parametr dodatkowy: Minimalna liczba widocznych zdjęć na mapie do wyświetlania trasy */}
                 <div className="flex items-center justify-between pt-1 border-t border-[#222736]">
                   <span className="text-slate-300 font-medium">Min. liczba zdjęć:</span>
                   <div className="flex items-center gap-1">

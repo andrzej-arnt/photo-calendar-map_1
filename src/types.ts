@@ -37,3 +37,13 @@ export interface PhotoEvent {
   fileSize?: number;
   filePath?: string;
 }
+
+export interface AppSettings {
+  showConnectionLines: boolean;
+  arrowDirection: 'forward' | 'backward';
+  markerType: 'thumbnail' | 'dot';
+  lineThickness: number;
+  lineColor: string;
+  linesMode: 'days' | 'count'; // 'days' = skala 10 dni i mniej, 'count' = progi liczbowe zdjęć
+  photoCountThreshold: number; // np. 10, 25, 50, 100, 200, 500, 1000, 2000
+}
